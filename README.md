@@ -1,4 +1,6 @@
-<h1 align="center">Self-Shrinking AI Platform for AWS DevOps Agent</h1>
+<h1 align="center">AWS DevOps Agent Extensible Platform</h1>
+
+<p align="center">An AI platform blueprint that grows by manifest — and shrinks as AWS DevOps Agent learns.</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT--0-yellow.svg" alt="License: MIT-0"></a>
