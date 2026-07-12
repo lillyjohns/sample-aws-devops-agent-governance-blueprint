@@ -4,3 +4,5 @@ scripts/aws_env.sh
 *.env
 __pycache__/
 .DS_Store
+scripts/run_nl_demo.sh
+scripts/run_nl_poll.sh
