@@ -135,6 +135,7 @@ The platform ships with cost optimization as its worked example — inherently p
 | `find_cost_waste` | custom Lambda | Compute Optimizer + Trusted Advisor + idle heuristics in one purposeful tool |
 | `locate_iac_source` | custom Lambda | **Resource ARN → owning IaC block** — the capability DevOps Agent lacks today |
 | `generate_cost_report` | custom Lambda | xlsx → S3 presigned URL, for every client (chat, IDE, scheduled) |
+| `search_runbook` | custom Lambda | Keyword search over the team's runbook library (markdown in S3, seeded from the capability folder) — the agent consults *approved* remediation procedures instead of improvising |
 | `opensearch` *(disabled)* | external-repo | Second-domain proof: registers an [independently-deployed OpenSearch MCP server](https://github.com/lillyjohns/devopsagent-opensearch-mcp) — zero new tool code |
 
 Deliberately **not** on the Gateway: CloudWatch/CloudTrail (DevOps Agent has them natively) and GitHub **write** credentials (isolated in the PR agent — a shared write path would let any IDE client open PRs). Rationale in [docs/DESIGN.md](docs/DESIGN.md).
@@ -177,6 +178,27 @@ make restore                   # or reset everything
 
 Scenarios: oversized EC2 instance · idle NAT gateway · unattached EBS volumes · gp2→gp3 migration.
 
+### Alert → investigation (live today)
+
+The first slice of the demo loop is deployed and working: an alert becomes a
+*question to the agent*, and the agent answers it with the governed catalog.
+
+```bash
+python3 scripts/trigger_alert.py --watch
+# → EventBridge rule matches the (synthetic) cost anomaly event
+# → alert-glue Lambda opens a DevOps Agent chat (CreateChat + SendMessage)
+#   with an NL prompt: "Alert received: … investigate, consult the runbook, propose a fix"
+# → DevOps Agent calls find_cost_waste through the Gateway,
+#   pulls the approved procedure via search_runbook,
+#   and proposes a runbook-compliant fix with estimated savings
+# → follow along in the DevOps Agent console (executionId is in the glue logs)
+```
+
+The glue is ~100 lines and deliberately dumb — no parsing, no remediation
+logic. Swap the demo event pattern for a real source (Cost Anomaly Detection
+via SNS→EventBridge, CloudWatch alarm state changes) without touching the
+Lambda. Judgment stays in DevOps Agent; runbooks keep it *governed* judgment.
+
 ## Deployability
 
 Target: **single `cdk deploy`** (~95% today, tracked in [Roadmap](#roadmap)).
@@ -209,10 +231,12 @@ The E2E script reads the Gateway URL from the CloudFormation outputs — no conf
 [PASS] tools/list exposes catalog
 [PASS] find_cost_waste returns well-formed result — 0 findings
 [PASS] generate_cost_report returns downloadable CSV
+[PASS] search_runbook ranks the NAT gateway runbook first — 'Idle NAT Gateway Remediation' score=5.5
+[PASS] search_runbook include_content returns full markdown
 [PASS] planted EBS volume detected as waste — vol-09a4ae5e174e41588
        cleaned up vol-09a4ae5e174e41588
 
-8 passed, 0 failed
+10 passed, 0 failed
 ```
 
 ## Project structure
@@ -231,12 +255,14 @@ Planned layout (see [Roadmap](#roadmap)):
 │   │   ├── find-cost-waste/     #     manifest.yaml + lambda/
 │   │   ├── locate-iac-source/   #     manifest.yaml + lambda/
 │   │   ├── generate-report/     #     manifest.yaml + lambda/
+│   │   ├── search-runbook/      #     manifest.yaml + lambda/ + runbooks/ (data pack → S3)
 │   │   ├── opensearch/          #     external-repo, enabled: false
 │   │   └── examples/
 │   │       └── s3-storage-class/ #    the "write your own Lambda target" tutorial
 │   └── a2a/                     #   agent-shaped → A2A registration
 │       └── remediation-pr/      #     Strands agent — decommissionable by design
 ├── scenarios/                   # break/fix demo workload + Makefile
+│   └── alert-glue/              #   EventBridge alert → DevOps Agent chat (deployed by Scenarios stack)
 ├── docs/
 │   ├── DESIGN.md                # design rationale & decision log
 │   ├── GOVERNANCE.md            # pillar mapping, scope boundaries, graduation path
@@ -259,9 +285,9 @@ The full rationale lives in **[docs/DESIGN.md](docs/DESIGN.md)**:
 ## Roadmap
 
 - [x] **M1 — Platform core:** manifest-driven `Capabilities` CDK construct (synth-time governance validation), Gateway stack, DevOps Agent binding (`AgentSpace` + `Service` + `Association` with tool allowlist) — **deployed & verified in ap-northeast-1, 100% CloudFormation, zero console steps**
-- [ ] **M2 — Capability packs:** `find_cost_waste` ✅ and `generate_cost_report` ✅ (live, tested through the Gateway); remaining: awslabs reuse packaging (Cost Explorer, Pricing), `locate_iac_source`, OpenSearch endpoint wiring
+- [ ] **M2 — Capability packs:** `find_cost_waste` ✅, `generate_cost_report` ✅, `search_runbook` ✅ (live, tested through the Gateway); remaining: awslabs reuse packaging (Cost Explorer, Pricing), `locate_iac_source`, OpenSearch endpoint wiring
 - [ ] **M3 — Remediation-PR Agent:** Strands on AgentCore Runtime, A2A registration, `cdk validate` integration
-- [ ] **M4 — Scenarios:** break/fix workload + Makefile + walkthrough docs
+- [ ] **M4 — Scenarios:** alert → investigation glue ✅ (Scenarios stack: EventBridge → CreateChat/SendMessage, `scripts/trigger_alert.py`); remaining: break/fix workload + Makefile + walkthrough docs
 - [ ] **M5 — Hardening:** custom resources for post-deploy steps, `examples/s3-storage-class`, optional AWS Agent Registry auto-publish, AWS-icon architecture diagram, cost estimate table
 - [ ] Verify: A2A finding payload shape · scheduled-agent-as-code via repo-imported skills · native PR capability scope (Phase-2 trigger)
 
