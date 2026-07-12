@@ -19,6 +19,9 @@ export interface DevOpsAgentStackProps extends cdk.StackProps {
  * Uses Cfn L1s via CfnResource because AWS::DevOpsAgent::* has no L2 yet.
  */
 export class DevOpsAgentStack extends cdk.Stack {
+  /** AgentSpace id token — consumed by the Scenarios stack's alert glue. */
+  public readonly agentSpaceId: string;
+
   constructor(scope: Construct, id: string, props: DevOpsAgentStackProps) {
     super(scope, id, props);
 
@@ -68,8 +71,8 @@ export class DevOpsAgentStack extends cdk.Stack {
       },
     });
 
-    new cdk.CfnOutput(this, 'AgentSpaceId', {
-      value: agentSpace.getAtt('AgentSpaceId').toString(),
-    });
+    this.agentSpaceId = agentSpace.getAtt('AgentSpaceId').toString();
+
+    new cdk.CfnOutput(this, 'AgentSpaceId', { value: this.agentSpaceId });
   }
 }
