@@ -1,0 +1,33 @@
+# EXAMPLE — the same PR function, modeled as an A2A delegation target.
+#
+# The live demo ships the PR function as a Gateway MCP tool
+# (capabilities/mcp/propose-fix-pr): the transform is deterministic, the call is
+# stateless, and DevOps Agent supplies all the reasoning — that's tool-shaped by
+# the decision test in docs/DESIGN.md. This manifest shows what the SAME
+# capability looks like grown up into an agent: multi-step remediation (locate
+# IaC across many repos, synthesize non-trivial patches, iterate on review
+# feedback) is agent-shaped and belongs here, with its own runtime and isolated
+# credentials. Enabling this is the graduation path, not a requirement.
+#
+# See docs/DESIGN.md § "MCP vs A2A" and README § "Retiring a capability".
+name: remediation-pr-agent
+description: >
+  Autonomous remediation agent: given a cost finding, locates the owning IaC
+  across the organization's repositories, synthesizes a fix, opens a PR, and
+  iterates on review feedback. The agent-shaped evolution of the
+  propose-fix-pr MCP tool.
+type: external-agent          # runs on its own runtime (e.g. AgentCore Runtime); this repo only registers it
+enabled: false                # example / graduation path — the live demo uses the MCP tool instead
+owner: platform-team
+endpoint:
+  ssmParameter: /governance-blueprint/a2a/remediation-pr-agent/endpoint
+auth: sigv4
+scope: >
+  May be delegated cost-remediation PRs only. Repository write access is limited
+  to a fine-grained PAT held by the agent itself (never on the shared Gateway).
+  Every write must land as a pull request — direct pushes to protected branches
+  are out of scope.
+retirement: >
+  Decommission when AWS DevOps Agent gains native PR-creation for cost findings,
+  or fold back into the propose-fix-pr MCP tool if multi-repo autonomy turns out
+  not to be needed. Deregistering the A2A connection is the whole rollback.

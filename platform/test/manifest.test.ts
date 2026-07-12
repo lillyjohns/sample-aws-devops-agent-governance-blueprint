@@ -124,6 +124,55 @@ data:
 `;
     expect(() => loadMcpManifests(makeCapability(bad))).toThrow(/'data' requires both/);
   });
+
+  describe('externalWrite (write-as-proposal) contract', () => {
+    const WRITE_DECL = `
+externalWrite:
+  system: github
+  action: open-pull-request
+  gate: human-review
+  credential:
+    ssmParameter: /test/github-token
+    envVar: GITHUB_TOKEN_PARAM
+`;
+
+    test('accepts a human-review-gated external write with an SSM credential', () => {
+      const manifests = loadMcpManifests(makeCapability(VALID + WRITE_DECL));
+      expect(manifests[0].externalWrite?.gate).toBe('human-review');
+      expect(manifests[0].externalWrite?.credential.ssmParameter).toBe('/test/github-token');
+    });
+
+    test('rejects an ungated external write — every write must be a human-reviewed proposal', () => {
+      const bad = VALID + WRITE_DECL.replace('human-review', 'auto');
+      expect(() => loadMcpManifests(makeCapability(bad))).toThrow(/must be 'human-review'/);
+    });
+
+    test('rejects an external write without an SSM-resolved credential (no inline secrets)', () => {
+      const bad = VALID + `
+externalWrite:
+  system: github
+  action: open-pull-request
+  gate: human-review
+`;
+      expect(() => loadMcpManifests(makeCapability(bad))).toThrow(/ssmParameter/);
+    });
+
+    test('rejects an external write missing system/action', () => {
+      const bad = VALID + `
+externalWrite:
+  gate: human-review
+  credential:
+    ssmParameter: /x
+    envVar: X
+`;
+      expect(() => loadMcpManifests(makeCapability(bad))).toThrow(/'system' and 'action'/);
+    });
+
+    test('externalWrite does not relax the AWS read-only contract', () => {
+      const bad = (VALID + WRITE_DECL).replace('ec2:DescribeVolumes', 'ec2:ModifyVolume');
+      expect(() => loadMcpManifests(makeCapability(bad))).toThrow(/looks mutating/);
+    });
+  });
 });
 
 describe('repo capability manifests', () => {
@@ -131,18 +180,34 @@ describe('repo capability manifests', () => {
 
   test('all real manifests in the repo pass the governance gate', () => {
     const manifests = loadMcpManifests(repoCapabilities);
-    expect(manifests.length).toBeGreaterThanOrEqual(4);
+    expect(manifests.length).toBeGreaterThanOrEqual(5);
     for (const m of manifests) {
       expect(m.readOnly).toBe(true);
     }
   });
 
-  test('find-cost-waste, generate-report, and search-runbook are enabled', () => {
+  test('find-cost-waste, generate-report, search-runbook, and propose-fix-pr are enabled', () => {
     const manifests = loadMcpManifests(repoCapabilities);
     const enabled = manifests.filter((m) => m.enabled).map((m) => m.name);
     expect(enabled).toEqual(
-      expect.arrayContaining(['find-cost-waste', 'generate-report', 'search-runbook'])
+      expect.arrayContaining(['find-cost-waste', 'generate-report', 'search-runbook', 'propose-fix-pr'])
     );
+  });
+
+  test('propose-fix-pr declares the write-as-proposal contract and a retirement condition', () => {
+    const manifests = loadMcpManifests(repoCapabilities);
+    const pr = manifests.find((m) => m.name === 'propose-fix-pr')!;
+    expect(pr.externalWrite).toEqual({
+      system: 'github',
+      action: 'open-pull-request',
+      gate: 'human-review',
+      credential: {
+        ssmParameter: '/governance-blueprint/github-token',
+        envVar: 'GITHUB_TOKEN_PARAM',
+      },
+    });
+    expect(pr.permissions ?? []).toHaveLength(0); // SSM read is granted by the construct, scoped to one parameter
+    expect(pr.retirement).toMatch(/native PR/i);
   });
 
   test('search-runbook declares its runbook data pack and no IAM beyond it', () => {

@@ -58,7 +58,7 @@ describe('PlatformStack', () => {
   });
 
   test('creates one Gateway target per enabled lambda capability', () => {
-    platform.resourceCountIs('AWS::BedrockAgentCore::GatewayTarget', 3);
+    platform.resourceCountIs('AWS::BedrockAgentCore::GatewayTarget', 4);
   });
 
   test('every target description is within the 200-char CFN limit (learned from live deploy failure)', () => {
@@ -153,7 +153,7 @@ describe('PlatformStack', () => {
     const appFns = Object.values(fns).filter((f) =>
       String(f.Properties.FunctionName ?? '').startsWith('gov-blueprint-')
     );
-    expect(appFns.length).toBe(3);
+    expect(appFns.length).toBe(4);
     for (const r of [...appFns, ...Object.values(platform.findResources('AWS::S3::Bucket'))]) {
       expect(r.Properties.Tags).toEqual(
         expect.arrayContaining([{ Key: 'Project', Value: 'devops-sample-poc' }])
@@ -162,7 +162,7 @@ describe('PlatformStack', () => {
     // IAM roles with a tag manager (all app-defined roles) must be tagged too.
     const roles = Object.values(platform.findResources('AWS::IAM::Role'));
     const tagged = roles.filter((r) => r.Properties.Tags);
-    expect(tagged.length).toBeGreaterThanOrEqual(5); // gateway, invoke, 3 lambda exec roles
+    expect(tagged.length).toBeGreaterThanOrEqual(6); // gateway, invoke, 4 lambda exec roles
     for (const r of tagged) {
       expect(r.Properties.Tags).toEqual(
         expect.arrayContaining([{ Key: 'Project', Value: 'devops-sample-poc' }])
@@ -180,10 +180,39 @@ describe('PlatformStack', () => {
   });
 
   test('all catalog tool names respect the DevOps Agent 64-char combined limit', () => {
-    expect(platformStack.toolNames.length).toBeGreaterThanOrEqual(3);
+    expect(platformStack.toolNames.length).toBeGreaterThanOrEqual(4);
     for (const tool of platformStack.toolNames) {
       expect(`${MCP_SERVER_NAME}_${tool}`.length).toBeLessThanOrEqual(MAX_COMBINED_TOOL_NAME);
     }
+  });
+
+  test('propose-fix-pr lambda gets its GitHub token from SSM only (scoped read, no inline secret)', () => {
+    // The write-as-proposal credential: exactly one ssm:GetParameter grant,
+    // scoped to the declared parameter — and the token itself never appears
+    // anywhere in the template.
+    const policies = platform.findResources('AWS::IAM::Policy');
+    let ssmGrants = 0;
+    for (const p of Object.values(policies)) {
+      for (const stmt of p.Properties.PolicyDocument.Statement) {
+        const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+        if (actions.includes('ssm:GetParameter')) {
+          ssmGrants++;
+          const res = JSON.stringify(stmt.Resource);
+          expect(res).toContain('parameter/governance-blueprint/github-token');
+        }
+      }
+    }
+    expect(ssmGrants).toBe(1);
+
+    const fns = platform.findResources('AWS::Lambda::Function');
+    const prFn = Object.values(fns).find(
+      (f) => f.Properties.FunctionName === 'gov-blueprint-propose-fix-pr'
+    )!;
+    expect(prFn).toBeDefined();
+    expect(prFn.Properties.Environment.Variables.GITHUB_TOKEN_PARAM).toBe(
+      '/governance-blueprint/github-token'
+    );
+    expect(JSON.stringify(platform.toJSON())).not.toMatch(/gh[pos]_[A-Za-z0-9]{20,}/);
   });
 });
 
@@ -216,6 +245,7 @@ describe('DevOpsAgentStack', () => {
             GATEWAY_SEARCH_TOOL,
             'find-cost-waste___find_cost_waste',
             'generate-report___generate_cost_report',
+            'propose-fix-pr___propose_fix_pr',
             'search-runbook___search_runbook',
           ]),
         },

@@ -12,7 +12,10 @@ Checks:
   4. tools/call find_cost_waste returns a well-formed result
   5. tools/call generate_cost_report returns a presigned artifact URL
   6. tools/call search_runbook finds the NAT gateway runbook + full content retrieval
-  7. (--plant-waste) plants an unattached EBS volume, verifies detection, cleans up
+  7. tools/call search_runbook surfaces the gp2->gp3 runbook naming propose_fix_pr
+  8. tools/call propose_fix_pr dry_run returns the gp2->gp3 diff without opening a PR
+  9. propose_fix_pr rejects an unapproved change_description (transform registry gate)
+ 10. (--plant-waste) plants an unattached EBS volume, verifies detection, cleans up
 
 Usage:
   python3 scripts/e2e_test.py [--region ap-northeast-1] [--plant-waste]
@@ -38,6 +41,7 @@ EXPECTED_TOOLS = {
     "find-cost-waste___find_cost_waste",
     "generate-report___generate_cost_report",
     "search-runbook___search_runbook",
+    "propose-fix-pr___propose_fix_pr",
 }
 
 passed = 0
@@ -200,7 +204,67 @@ def main() -> int:
         ok = bool(results and results[0].get("content", "").startswith("# "))
     check("search_runbook include_content returns full markdown", ok)
 
-    # 7. optional waste-detection round trip
+    # 7. the runbook that closes the loop: gp2 migration names propose_fix_pr
+    r = gw.call(
+        "tools/call",
+        {
+            "name": "search-runbook___search_runbook",
+            "arguments": {"query": "gp2 volume migration", "include_content": True, "max_results": 1},
+        },
+        req_id=8,
+    )
+    ok = bool(r and not r.get("result", {}).get("isError"))
+    if ok:
+        body = json.loads(r["result"]["content"][0]["text"])
+        results = body.get("results", [])
+        ok = bool(results and "propose_fix_pr" in results[0].get("content", ""))
+    check("gp2 runbook instructs the agent to use propose_fix_pr", ok)
+
+    # 8. propose_fix_pr dry run — full transform pipeline without the GitHub write
+    r = gw.call(
+        "tools/call",
+        {
+            "name": "propose-fix-pr___propose_fix_pr",
+            "arguments": {
+                "file_path": "scenarios/demo-workload/template.yaml",
+                "change_description": "ebs-gp2-to-gp3",
+                "dry_run": True,
+            },
+        },
+        req_id=9,
+    )
+    ok = bool(r and not r.get("result", {}).get("isError"))
+    detail = ""
+    if ok:
+        body = json.loads(r["result"]["content"][0]["text"])
+        ok = (
+            body.get("status") == "dry_run"
+            and "-      VolumeType: gp2" in body.get("diff", "")
+            and "+      VolumeType: gp3" in body.get("diff", "")
+        )
+        detail = f"{body.get('replacements')} replacement(s), no PR opened" if ok else json.dumps(body)[:200]
+    check("propose_fix_pr dry_run returns the gp2→gp3 diff without opening a PR", ok, detail)
+
+    # 9. the transform registry is the gate: unapproved changes are rejected
+    r = gw.call(
+        "tools/call",
+        {
+            "name": "propose-fix-pr___propose_fix_pr",
+            "arguments": {
+                "file_path": "scenarios/demo-workload/template.yaml",
+                "change_description": "delete-all-volumes",
+                "dry_run": True,
+            },
+        },
+        req_id=10,
+    )
+    ok = bool(r)
+    if ok:
+        body = json.loads(r["result"]["content"][0]["text"])
+        ok = "unknown change_description" in body.get("error", "") and "supported" in body
+    check("propose_fix_pr rejects unapproved change_description", ok)
+
+    # 10. optional waste-detection round trip
     if args.plant_waste:
         ec2 = boto3.client("ec2", region_name=args.region)
         az = ec2.describe_availability_zones()["AvailabilityZones"][0]["ZoneName"]
