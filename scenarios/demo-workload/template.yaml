@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Demo workload for the Governance Blueprint remediation story. Intentionally
+  wasteful IaC: a gp2 EBS volume (should be gp3, ~20% cheaper for the same
+  performance) and an over-provisioned instance type. This template is the
+  "source of truth" that the propose_fix_pr tool opens PRs against. It is NOT
+  deployed by the blueprint (deploying it would just burn money - the point is
+  the IaC-level fix).
+
+Parameters:
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: AZ for the demo volume
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  # WASTE: gp2 is legacy - gp3 delivers the same baseline performance at ~20%
+  # lower cost and decouples IOPS/throughput from size. find_cost_waste flags
+  # exactly this pattern (check: gp2_volumes).
+  DataVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      Size: 100
+      VolumeType: gp2
+      Tags:
+        - Key: Project
+          Value: devops-sample-poc
+        - Key: Purpose
+          Value: demo-workload-waste
+
+  # WASTE: m5.2xlarge for a workload that idles - Compute Optimizer would flag
+  # this as over-provisioned (check: overprovisioned_ec2).
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmi
+      InstanceType: m5.2xlarge
+      AvailabilityZone: !Ref AvailabilityZone
+      Volumes:
+        - Device: /dev/sdf
+          VolumeId: !Ref DataVolume
+      Tags:
+        - Key: Project
+          Value: devops-sample-poc
+        - Key: Purpose
+          Value: demo-workload-waste
+
+Outputs:
+  DataVolumeId:
+    Value: !Ref DataVolume

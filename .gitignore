@@ -1,0 +1,6 @@
+# Local helpers that reference machine-specific credential files — never commit
+scripts/run_e2e.sh
+scripts/aws_env.sh
+*.env
+__pycache__/
+.DS_Store
