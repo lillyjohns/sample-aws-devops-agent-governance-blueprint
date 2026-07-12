@@ -11,7 +11,8 @@ Checks:
   3. tools/list exposes every catalog tool + semantic search
   4. tools/call find_cost_waste returns a well-formed result
   5. tools/call generate_cost_report returns a presigned artifact URL
-  6. (--plant-waste) plants an unattached EBS volume, verifies detection, cleans up
+  6. tools/call search_runbook finds the NAT gateway runbook + full content retrieval
+  7. (--plant-waste) plants an unattached EBS volume, verifies detection, cleans up
 
 Usage:
   python3 scripts/e2e_test.py [--region ap-northeast-1] [--plant-waste]
@@ -36,6 +37,7 @@ EXPECTED_TOOLS = {
     "x_amz_bedrock_agentcore_search",
     "find-cost-waste___find_cost_waste",
     "generate-report___generate_cost_report",
+    "search-runbook___search_runbook",
 }
 
 passed = 0
@@ -164,7 +166,41 @@ def main() -> int:
             ok, head = False, str(e)
     check("generate_cost_report returns downloadable CSV", ok)
 
-    # 6. optional waste-detection round trip
+    # 6. search_runbook
+    r = gw.call(
+        "tools/call",
+        {"name": "search-runbook___search_runbook", "arguments": {"query": "idle NAT gateway"}},
+        req_id=6,
+    )
+    ok = bool(r and not r.get("result", {}).get("isError"))
+    top = None
+    if ok:
+        body = json.loads(r["result"]["content"][0]["text"])
+        results = body.get("results", [])
+        top = results[0] if results else None
+        ok = bool(top and "nat" in top["title"].lower() and top.get("excerpt"))
+    check(
+        "search_runbook ranks the NAT gateway runbook first",
+        ok,
+        json.dumps(r)[:200] if not ok else f"'{top['title']}' score={top['score']}",
+    )
+
+    r = gw.call(
+        "tools/call",
+        {
+            "name": "search-runbook___search_runbook",
+            "arguments": {"query": "cost anomaly", "include_content": True, "max_results": 1},
+        },
+        req_id=7,
+    )
+    ok = bool(r and not r.get("result", {}).get("isError"))
+    if ok:
+        body = json.loads(r["result"]["content"][0]["text"])
+        results = body.get("results", [])
+        ok = bool(results and results[0].get("content", "").startswith("# "))
+    check("search_runbook include_content returns full markdown", ok)
+
+    # 7. optional waste-detection round trip
     if args.plant_waste:
         ec2 = boto3.client("ec2", region_name=args.region)
         az = ec2.describe_availability_zones()["AvailabilityZones"][0]["ZoneName"]
@@ -186,7 +222,7 @@ def main() -> int:
             r = gw.call(
                 "tools/call",
                 {"name": "find-cost-waste___find_cost_waste", "arguments": {"checks": ["unattached_ebs"]}},
-                req_id=5,
+                req_id=8,
             )
             body = json.loads(r["result"]["content"][0]["text"])
             found = any(vol in f.get("resource_arn", "") for f in body.get("findings", []))

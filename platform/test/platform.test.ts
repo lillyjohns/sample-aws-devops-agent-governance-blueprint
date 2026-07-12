@@ -6,6 +6,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
 import { DevOpsAgentStack } from '../lib/devops-agent-stack';
+import { ScenariosStack } from '../lib/scenarios-stack';
 import { MCP_SERVER_NAME, MAX_COMBINED_TOOL_NAME, GATEWAY_SEARCH_TOOL } from '../lib/constants';
 
 const ENV = { account: '111111111111', region: 'ap-northeast-1' };
@@ -19,10 +20,15 @@ function synth() {
     gatewayInvokeRoleArn: platform.gatewayInvokeRoleArn,
     toolNames: platform.toolNames,
   });
+  const scenarios = new ScenariosStack(app, 'TestScenarios', {
+    env: ENV,
+    agentSpaceId: agent.agentSpaceId,
+  });
   cdk.Tags.of(app).add('Project', 'devops-sample-poc');
   return {
     platform: Template.fromStack(platform),
     agent: Template.fromStack(agent),
+    scenarios: Template.fromStack(scenarios),
     platformStack: platform,
   };
 }
@@ -52,7 +58,17 @@ describe('PlatformStack', () => {
   });
 
   test('creates one Gateway target per enabled lambda capability', () => {
-    platform.resourceCountIs('AWS::BedrockAgentCore::GatewayTarget', 2);
+    platform.resourceCountIs('AWS::BedrockAgentCore::GatewayTarget', 3);
+  });
+
+  test('every target description is within the 200-char CFN limit (learned from live deploy failure)', () => {
+    const targets = platform.findResources('AWS::BedrockAgentCore::GatewayTarget');
+    for (const [id, t] of Object.entries(targets)) {
+      const desc = t.Properties.Description ?? '';
+      expect(typeof desc).toBe('string');
+      expect(desc.length).toBeLessThanOrEqual(200);
+      expect(desc).not.toMatch(/\n/); // clamped to a single line
+    }
   });
 
   test('all targets use GATEWAY_IAM_ROLE credentials (no secrets on the shared plane)', () => {
@@ -137,7 +153,7 @@ describe('PlatformStack', () => {
     const appFns = Object.values(fns).filter((f) =>
       String(f.Properties.FunctionName ?? '').startsWith('gov-blueprint-')
     );
-    expect(appFns.length).toBe(2);
+    expect(appFns.length).toBe(3);
     for (const r of [...appFns, ...Object.values(platform.findResources('AWS::S3::Bucket'))]) {
       expect(r.Properties.Tags).toEqual(
         expect.arrayContaining([{ Key: 'Project', Value: 'devops-sample-poc' }])
@@ -146,7 +162,7 @@ describe('PlatformStack', () => {
     // IAM roles with a tag manager (all app-defined roles) must be tagged too.
     const roles = Object.values(platform.findResources('AWS::IAM::Role'));
     const tagged = roles.filter((r) => r.Properties.Tags);
-    expect(tagged.length).toBeGreaterThanOrEqual(4); // gateway, invoke, 2 lambda exec roles
+    expect(tagged.length).toBeGreaterThanOrEqual(5); // gateway, invoke, 3 lambda exec roles
     for (const r of tagged) {
       expect(r.Properties.Tags).toEqual(
         expect.arrayContaining([{ Key: 'Project', Value: 'devops-sample-poc' }])
@@ -154,8 +170,17 @@ describe('PlatformStack', () => {
     }
   });
 
+  test('runbook data bucket grants the search lambda read-only access', () => {
+    // The search-runbook lambda must be able to read its data bucket but not write it.
+    const policies = platform.findResources('AWS::IAM::Policy');
+    const runbookPolicies = Object.entries(policies).filter(([id]) =>
+      id.includes('searchrunbookfn')
+    );
+    expect(runbookPolicies.length).toBeGreaterThanOrEqual(1);
+  });
+
   test('all catalog tool names respect the DevOps Agent 64-char combined limit', () => {
-    expect(platformStack.toolNames.length).toBeGreaterThanOrEqual(2);
+    expect(platformStack.toolNames.length).toBeGreaterThanOrEqual(3);
     for (const tool of platformStack.toolNames) {
       expect(`${MCP_SERVER_NAME}_${tool}`.length).toBeLessThanOrEqual(MAX_COMBINED_TOOL_NAME);
     }
@@ -191,9 +216,55 @@ describe('DevOpsAgentStack', () => {
             GATEWAY_SEARCH_TOOL,
             'find-cost-waste___find_cost_waste',
             'generate-report___generate_cost_report',
+            'search-runbook___search_runbook',
           ]),
         },
       },
+    });
+  });
+});
+
+describe('ScenariosStack', () => {
+  const { scenarios } = synth();
+
+  test('alert glue lambda is wired to the cost anomaly EventBridge rule', () => {
+    scenarios.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'gov-blueprint-alert-glue',
+      Environment: {
+        Variables: Match.objectLike({ AGENT_SPACE_ID: Match.anyValue() }),
+      },
+    });
+    scenarios.hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: {
+        source: ['governance.blueprint.demo'],
+        'detail-type': ['Cost Anomaly Detected'],
+      },
+    });
+    scenarios.hasResourceProperties('AWS::Lambda::Permission', {
+      Principal: 'events.amazonaws.com',
+    });
+  });
+
+  test('glue role is scoped to chat operations on its own AgentSpace only', () => {
+    const policies = scenarios.findResources('AWS::IAM::Policy');
+    let found = false;
+    for (const p of Object.values(policies)) {
+      for (const stmt of p.Properties.PolicyDocument.Statement) {
+        const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+        if (actions.includes('aidevops:CreateChat')) {
+          found = true;
+          expect(actions.sort()).toEqual(['aidevops:CreateChat', 'aidevops:SendMessage']);
+          expect(stmt.Resource).not.toEqual('*');
+        }
+      }
+    }
+    expect(found).toBe(true);
+  });
+
+  test('glue lambda and rule carry the project tag', () => {
+    scenarios.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'gov-blueprint-alert-glue',
+      Tags: Match.arrayWith([{ Key: 'Project', Value: 'devops-sample-poc' }]),
     });
   });
 });
