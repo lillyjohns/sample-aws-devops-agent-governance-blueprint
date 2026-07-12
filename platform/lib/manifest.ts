@@ -10,6 +10,20 @@ export interface ToolDef {
   outputSchema?: Record<string, unknown>;
 }
 
+/**
+ * Declared external (non-AWS) write side effect. The ONLY write shape the shared
+ * Gateway accepts is a human-gated proposal (e.g. a GitHub PR): the tool may
+ * stage a change, but a human merge/approval applies it. The credential is
+ * never inline — it is resolved at runtime from an SSM SecureString the
+ * construct scopes the Lambda role to (least privilege, auditable in CloudTrail).
+ */
+export interface ExternalWriteDecl {
+  system: string; // e.g. 'github'
+  action: string; // e.g. 'open-pull-request'
+  gate: 'human-review';
+  credential: { ssmParameter: string; envVar: string };
+}
+
 /** Parsed capability manifest (capabilities/mcp/<name>/manifest.yaml). */
 export interface McpCapabilityManifest {
   name: string;
@@ -27,6 +41,12 @@ export interface McpCapabilityManifest {
    */
   data?: { dir: string; envVar: string };
   source?: string; // external-repo — the owning repository
+  /**
+   * Optional declared non-AWS write side effect (write-as-proposal pattern).
+   * `readOnly: true` still applies to the AWS environment; the only permitted
+   * external write is one gated by human review (see ExternalWriteDecl).
+   */
+  externalWrite?: ExternalWriteDecl;
   retirement?: string;
   tools?: ToolDef[];
   permissions?: string[]; // IAM actions, least-privilege, read-only
@@ -70,9 +90,29 @@ function validate(m: McpCapabilityManifest, file: string): void {
   if (!m.name) throw new Error(`${file}: 'name' is required`);
   if (m.readOnly !== true) {
     throw new Error(
-      `${file}: readOnly must be true — write capabilities are rejected on the shared Gateway. ` +
-        `Write paths belong in capabilities/a2a/ agents with isolated credentials.`
+      `${file}: readOnly must be true — the AWS environment is read-only for every Gateway ` +
+        `target. Autonomous write paths belong in capabilities/a2a/ agents with isolated ` +
+        `credentials; the only Gateway-side write shape is a human-gated proposal declared ` +
+        `via 'externalWrite'.`
     );
+  }
+  if (m.externalWrite) {
+    const w = m.externalWrite;
+    if (!w.system || !w.action) {
+      throw new Error(`${file}: 'externalWrite' requires 'system' and 'action'`);
+    }
+    if (w.gate !== 'human-review') {
+      throw new Error(
+        `${file}: externalWrite.gate must be 'human-review' — ungated writes are rejected ` +
+          `on the shared Gateway. Every external write must land as a proposal a human approves.`
+      );
+    }
+    if (!w.credential?.ssmParameter || !w.credential?.envVar) {
+      throw new Error(
+        `${file}: externalWrite.credential requires 'ssmParameter' and 'envVar' — ` +
+          `write credentials are never inlined; they resolve from SSM at runtime.`
+      );
+    }
   }
   for (const action of m.permissions ?? []) {
     if (WRITE_ACTION_PATTERN.test(action)) {

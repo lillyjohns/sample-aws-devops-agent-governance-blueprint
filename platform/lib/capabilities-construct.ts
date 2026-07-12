@@ -138,6 +138,27 @@ export class Capabilities extends Construct {
     // resources remain read-only per the manifest validator.
     this.artifactBucket.grantReadWrite(fn);
 
+    // Declared external write (write-as-proposal): the manifest validator has
+    // already enforced gate=human-review and an SSM-resolved credential. Grant
+    // the Lambda read access to exactly that one SecureString and tell it where
+    // to look — the secret itself never touches the template or the repo.
+    if (m.externalWrite) {
+      const paramName = m.externalWrite.credential.ssmParameter;
+      fn.addEnvironment(m.externalWrite.credential.envVar, paramName);
+      fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['ssm:GetParameter'],
+          resources: [
+            cdk.Stack.of(this).formatArn({
+              service: 'ssm',
+              resource: 'parameter',
+              resourceName: paramName.replace(/^\//, ''),
+            }),
+          ],
+        })
+      );
+    }
+
     if (m.permissions?.length) {
       fn.addToRolePolicy(
         new iam.PolicyStatement({ actions: m.permissions, resources: ['*'] })
