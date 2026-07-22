@@ -8,9 +8,11 @@ governance surface (deterministic transform registry, PR-as-proposal,
 SSM-held credential) is exactly the same code path the Gateway tool uses.
 
 Pure stdlib on purpose: AgentCore Runtime CodeConfiguration runs this zip
-directly (no container build, no pip deps beyond boto3 which the managed
-runtime provides). A2A contract per AgentCore docs: streamable HTTP server on
-0.0.0.0:9000 at '/', agent card at /.well-known/agent-card.json, /ping health.
+directly (no container build) and the managed Python runtime does NOT bundle
+boto3 — so the Lambda Invoke call is signed with a ~40-line stdlib SigV4
+implementation instead (see sigv4.py). A2A contract per AgentCore docs:
+streamable HTTP server on 0.0.0.0:9000 at '/', agent card at
+/.well-known/agent-card.json, /ping health.
 """
 
 import json
@@ -19,7 +21,7 @@ import re
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import boto3
+from sigv4 import invoke_lambda
 
 PROPOSE_FIX_PR_FUNCTION = os.environ.get(
     "PROPOSE_FIX_PR_FUNCTION", "gov-blueprint-propose-fix-pr"
@@ -88,10 +90,7 @@ def handle_finding(text: str) -> str:
     if finding:
         args["finding"] = finding
 
-    resp = boto3.client("lambda").invoke(
-        FunctionName=PROPOSE_FIX_PR_FUNCTION, Payload=json.dumps(args).encode()
-    )
-    result = json.loads(resp["Payload"].read())
+    result = invoke_lambda(PROPOSE_FIX_PR_FUNCTION, args)
 
     status = result.get("status", "error")
     if status == "pr_opened":

@@ -45,6 +45,9 @@ export class RemediationAgentStack extends cdk.Stack {
       path: path.join(
         __dirname, '..', '..', 'capabilities', 'a2a', 'remediation-pr-agent', 'agent'
       ),
+      // AgentCore Runtime rejects zips containing local __pycache__ artifacts
+      // ("Python cache files that are incompatible with the target runtime").
+      exclude: ['__pycache__', '**/__pycache__/**', '*.pyc'],
     });
 
     // --- Runtime execution role ---
@@ -182,7 +185,11 @@ export class RemediationAgentStack extends cdk.Stack {
       })
     );
 
-    const registration = new cdk.CustomResource(this, 'RemoteAgentRegistration', {
+    // Escape hatch for endpoint-format iteration: -c registerRemoteAgent=false
+    // deploys the runtime + roles without the DevOps Agent registration.
+    const register = this.node.tryGetContext('registerRemoteAgent') !== 'false';
+
+    const registration = register ? new cdk.CustomResource(this, 'RemoteAgentRegistration', {
       serviceToken: registrarFn.functionArn,
       resourceType: 'Custom::DevOpsAgentRemoteAgent',
       properties: {
@@ -197,15 +204,17 @@ export class RemediationAgentStack extends cdk.Stack {
         SigningService: 'bedrock-agentcore',
         InvokeRoleArn: invokeRole.roleArn,
       },
-    });
-    registration.node.addDependency(runtime);
+    }) : undefined;
+    registration?.node.addDependency(runtime);
 
     new cdk.CfnOutput(this, 'RuntimeArn', { value: runtime.attrAgentRuntimeArn });
-    new cdk.CfnOutput(this, 'RemoteAgentServiceId', {
-      value: registration.getAttString('ServiceId'),
-    });
-    new cdk.CfnOutput(this, 'RemoteAgentAssociationId', {
-      value: registration.getAttString('AssociationId'),
-    });
+    if (registration) {
+      new cdk.CfnOutput(this, 'RemoteAgentServiceId', {
+        value: registration.getAttString('ServiceId'),
+      });
+      new cdk.CfnOutput(this, 'RemoteAgentAssociationId', {
+        value: registration.getAttString('AssociationId'),
+      });
+    }
   }
 }
