@@ -104,6 +104,34 @@ platform routing) or still rolling out. The blueprint keeps the registration
 in IaC so the moment the orchestrator surfaces delegation, the agent is
 already wired.
 
+### Retest 2026-07-30 — still not surfaced
+
+Re-ran both layers with fresh credentials (execution
+`5225af7d-73b6-4141-af63-ca15966c05d1`):
+
+- ✅ `scripts/a2a_smoke.py` still passes: agent card 200 + `message/send`
+  returns the dry-run gp2→gp3 diff contract unchanged.
+- ❌ Chat delegation still unavailable. Asked the agent explicitly to invoke
+  the remote agent via A2A (not the Gateway tool). Journal shows:
+  - `search_user_tools("invoke remote A2A agent, agent-to-agent delegation,
+    call remote agent via A2A protocol")` → only
+    `gov-gw_x_amz_bedrock_agentcore_search` (a discovery utility).
+  - `list_associations` → both associations visible, including
+    `remediation-pr-agent` (`remoteagentsigv4`) with a valid runtime endpoint.
+  - Agent verbatim: *"The remote agent is registered, but the tool needed to
+    call it over A2A is not wired up."* It offered the Gateway MCP tool
+    (`propose-fix-pr___propose_fix_pr`) as the alternative.
+
+**Important contrast:** outbound delegation *does* work from the
+**investigation** execution context. In a separate POC (2026-07-24,
+`us-east-1`), DevOps Agent investigations successfully called a self-hosted
+third-party A2A agent registered the same way (`remoteagentsigv4`) — including
+instructing it to open a real GitHub PR. So the gap is specifically the *chat*
+orchestrator's tool registry, not the A2A routing platform. See
+[a2a-third-party-agent.md](a2a-third-party-agent.md) for the wire-level
+details of what DevOps Agent actually sends to external agents (spoiler: it is
+not textbook A2A JSON-RPC).
+
 ## Payload shape (A2A finding contract)
 
 What the remediation agent accepts in the A2A `message/send` text part —
@@ -128,3 +156,10 @@ source <aws-creds>   # any principal with bedrock-agentcore:InvokeAgentRuntime +
 python3 scripts/a2a_smoke.py                 # card + dry-run message/send
 python3 scripts/nl_chat.py --agent-space a0ad2ee6-... --message "..."  # orchestrator attempts
 ```
+
+## See also
+
+- [a2a-third-party-agent.md](a2a-third-party-agent.md) — hosting your own
+  external A2A agent (outside AWS) and connecting it to DevOps Agent:
+  registration, the proto-style `SendMessage` dialect, response shape
+  requirements, and every bug we hit doing it.
